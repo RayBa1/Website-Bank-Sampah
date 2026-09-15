@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Header, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import asc
 
@@ -11,7 +11,7 @@ from app.utils.chat_manager import manager
 router = APIRouter(prefix="/chat", tags=["Livechat"])
 
 
-# ---------- WebSocket: Nasabah ----------
+# ========== WEBSOCKET: NASABAH ==========
 @router.websocket("/ws/nasabah")
 async def ws_chat_nasabah(websocket: WebSocket, token: str = Query(...), db: Session = Depends(get_db)):
     session = get_session(token)
@@ -31,11 +31,13 @@ async def ws_chat_nasabah(websocket: WebSocket, token: str = Query(...), db: Ses
 
             payload = PesanChatResponse.model_validate(pesan).model_dump(mode="json")
             await manager.send_to_admins(nik, payload)
+            # kirim balik konfirmasi ke pengirim juga, biar UI nasabah update instan
+            await websocket.send_json(payload)
     except WebSocketDisconnect:
         manager.disconnect_nasabah(nik)
 
 
-# ---------- WebSocket: Admin (buka chat nasabah tertentu) ----------
+# ========== WEBSOCKET: ADMIN (buka chat nasabah tertentu) ==========
 @router.websocket("/ws/admin/{nik}")
 async def ws_chat_admin(websocket: WebSocket, nik: str, token: str = Query(...), db: Session = Depends(get_db)):
     session = get_session(token)
@@ -49,8 +51,10 @@ async def ws_chat_admin(websocket: WebSocket, nik: str, token: str = Query(...),
         while True:
             data = await websocket.receive_json()
             pesan = PesanChat(
-                nik_nasabah=nik, sender_type="admin",
-                sender_id=admin_username, isi_pesan=data["isi_pesan"]
+                nik_nasabah=nik,
+                sender_type="admin",
+                sender_id=admin_username,
+                isi_pesan=data["isi_pesan"],
             )
             db.add(pesan)
             db.commit()
@@ -58,19 +62,21 @@ async def ws_chat_admin(websocket: WebSocket, nik: str, token: str = Query(...),
 
             payload = PesanChatResponse.model_validate(pesan).model_dump(mode="json")
             await manager.send_to_nasabah(nik, payload)
+            await websocket.send_json(payload)
     except WebSocketDisconnect:
         manager.disconnect_admin(nik, websocket)
 
 
-# ---------- REST: riwayat chat (buat load pertama kali / pagination) ----------
+# ========== REST: riwayat chat (load pertama kali / pagination) ==========
 @router.get("/history/{nik}", response_model=list[PesanChatResponse])
-def get_chat_history(
+def get_chat_history_admin(
     nik: str,
     authorization: str = Header(None),
     limit: int = 50,
     db: Session = Depends(get_db),
 ):
-    get_current_admin(authorization)  # cuma admin yang butuh akses via nik orang lain
+    """Admin lihat riwayat chat nasabah tertentu berdasarkan NIK."""
+    get_current_admin(authorization)
     return (
         db.query(PesanChat)
         .filter(PesanChat.nik_nasabah == nik)
@@ -81,11 +87,12 @@ def get_chat_history(
 
 
 @router.get("/history-nasabah", response_model=list[PesanChatResponse])
-def get_own_chat_history(
+def get_chat_history_nasabah(
     authorization: str = Header(None),
     limit: int = 50,
     db: Session = Depends(get_db),
 ):
+    """Nasabah lihat riwayat chat-nya sendiri."""
     nik = get_current_nasabah(authorization)
     return (
         db.query(PesanChat)

@@ -4,8 +4,9 @@ from app.core.database import get_db
 from app.models.models import Nasabah, Admin, RoleAdmin
 from app.schemas.auth import RequestOTP, VerifyOTP, OTPResponse, LoginResponse, NikLogin
 from app.schemas.admin import SuperAdminLoginRequest, SuperAdminVerifyOTP, AdminLogin, AdminVerifyOTP
-from app.utils.security import verify_password, create_session, delete_session, extract_session_id, check_login_rate_limit, reset_login_rate_limit
+from app.utils.security import verify_password, create_session, delete_session, extract_session_id, check_login_rate_limit, reset_login_rate_limit, check_otp_request_rate_limit
 from app.utils.otp_service import OTPService
+from app.utils.email_service import send_otp_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -108,7 +109,10 @@ def login_admin(data: AdminLogin, db: Session = Depends(get_db)):
     if not admin.email:
         raise HTTPException(status_code=400, detail="Akun ini belum punya email terdaftar, hubungi super admin")
 
+    check_otp_request_rate_limit(admin.email)
+
     kode_otp = OTPService.create_otp(db, admin.email)
+    # send_otp_email(admin.email, kode_otp) # OPEN NANTIYA UNTUK KIRIM EMAIL, SEKARANG DI-LOG KE CONSOLE SAJA
 
     print(f"\n{'='*60}")
     print(f" OTP Admin untuk {admin.email}: {kode_otp}")
@@ -158,7 +162,11 @@ def login_super_admin(data: SuperAdminLoginRequest, db: Session = Depends(get_db
     if not admin or not verify_password(data.password, admin.password):
         raise HTTPException(status_code=401, detail="Email atau password salah")
 
+    check_otp_request_rate_limit(admin.email)
+
     kode_otp = OTPService.create_otp(db, admin.email)
+
+    # send_otp_email(admin.email, kode_otp) # OPEN NANTIYA UNTUK KIRIM EMAIL, SEKARANG DI-LOG KE CONSOLE SAJA
 
     print(f"\n{'='*60}")
     print(f"OTP Super Admin untuk {admin.email}: {kode_otp}")

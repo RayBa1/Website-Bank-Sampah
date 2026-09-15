@@ -10,8 +10,10 @@ SESSION_EXPIRE_SECONDS = 60 * 60 * 24  # 24 jam, sama seperti sebelumnya
 IOT_API_KEY = os.getenv("IOT_API_KEY")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-LOGIN_RATE_LIMIT_MAX = 5            # maksimal percobaan
-LOGIN_RATE_LIMIT_WINDOW = 15 * 60   # 15 menit dalam detik
+LOGIN_RATE_LIMIT_MAX = 5                    # maksimal percobaan
+LOGIN_RATE_LIMIT_WINDOW = 15 * 60           # 15 menit dalam detik
+OTP_REQUEST_RATE_LIMIT_MAX = 3              # maksimal 3x kirim OTP
+OTP_REQUEST_RATE_LIMIT_WINDOW = 10 * 60     # per 10 menit
 
 # ========== PASSWORD UTILITIES (tetap dipakai untuk Admin) ==========
 def hash_password(password: str) -> str:
@@ -125,3 +127,24 @@ def check_login_rate_limit(identifier: str):
 def reset_login_rate_limit(identifier: str):
     """Reset counter setelah login berhasil"""
     redis_client.delete(f"login_attempt:{identifier}")
+
+def check_otp_request_rate_limit(identifier: str):
+    """
+    Batasi permintaan OTP (email) per identifier - max 3x per 10 menit.
+    Beda dari check_login_rate_limit yang membatasi percobaan password salah;
+    ini khusus mencegah spam pengiriman email OTP.
+    """
+    key = f"otp_request:{identifier}"
+    current = redis_client.get(key)
+
+    if current and int(current) >= OTP_REQUEST_RATE_LIMIT_MAX:
+        ttl = redis_client.ttl(key)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Terlalu banyak permintaan OTP. Coba lagi dalam {ttl // 60 + 1} menit."
+        )
+
+    pipe = redis_client.pipeline()
+    pipe.incr(key)
+    pipe.expire(key, OTP_REQUEST_RATE_LIMIT_WINDOW, nx=True)
+    pipe.execute()

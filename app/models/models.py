@@ -284,7 +284,7 @@ class PesanChat(Base):
     __tablename__ = "pesan_chat"
 
     id = Column(Integer, primary_key=True, index=True)
-    nik_nasabah = Column(String, ForeignKey("nasabah.NIK"), nullable=False, index=True)
+    nik_nasabah = Column(String, ForeignKey("nasabah.nik"), nullable=False, index=True)
     sender_type = Column(String, nullable=False)   # "nasabah" atau "admin"
     sender_id = Column(String, nullable=True)      # username admin kalau sender_type = "admin", null kalau nasabah
     isi_pesan = Column(Text, nullable=False)

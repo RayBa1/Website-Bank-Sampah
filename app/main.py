@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from dotenv import load_dotenv
 import os
+from fastapi.middleware.cors import CORSMiddleware
 
 # Import database & models
 from app.core.database import engine, Base
@@ -20,6 +21,14 @@ app = FastAPI(
     title="API Bank Sampah",
     description="Backend untuk proyek Bank Sampah (IoT, ML, Web)",
     version="1.0.0"
+)
+# ========== CORSMiddleware ==========
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "https://domain-frontend-kamu.com"],  # sesuaikan
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ========== INCLUDE ROUTERS ==========

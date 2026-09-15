@@ -12,3 +12,6 @@ class PesanChatResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class PesanChatCreate(BaseModel):
+    isi_pesan: str
