@@ -101,6 +101,7 @@ def logout_nasabah(authorization: str = Header(None)):
 # ========== ADMIN: LOGIN STEP 1 (username + password → kirim OTP ke email) ==========
 @router.post("/admin/login")
 def login_admin(data: AdminLogin, db: Session = Depends(get_db)):
+    check_login_rate_limit(data.username) 
     admin = db.query(Admin).filter(Admin.username == data.username).first()
 
     if not admin or not verify_password(data.password, admin.password):
@@ -154,6 +155,7 @@ def logout_admin(authorization: str = Header(None)):
 # ========== SUPER ADMIN: LOGIN STEP 1 (email + password → kirim OTP) ==========
 @router.post("/super-admin/login")
 def login_super_admin(data: SuperAdminLoginRequest, db: Session = Depends(get_db)):
+    check_login_rate_limit(data.username) 
     admin = db.query(Admin).filter(
         Admin.email == data.email,
         Admin.role == RoleAdmin.super_admin

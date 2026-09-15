@@ -1,4 +1,4 @@
-import random
+import secrets
 import string
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
@@ -7,7 +7,7 @@ from app.models.models import OTP
 class OTPService:
     @staticmethod
     def generate_otp() -> str:
-        return ''.join(random.choices(string.digits, k=6))
+        return ''.join(secrets.choice(string.digits) for _ in range(6))
 
     @staticmethod
     def create_otp(db: Session, identifier: str) -> str:

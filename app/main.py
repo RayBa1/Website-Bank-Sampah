@@ -1,7 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import os
 from fastapi.middleware.cors import CORSMiddleware
+import logging
 
 # Import database & models
 from app.core.database import engine, Base
@@ -13,6 +15,9 @@ from app.api import admin, nasabah, auth, transaksi, pengumuman, jenis_sampah, a
 # Load .env
 load_dotenv()
 
+# Configure logging
+logger = logging.getLogger("uvicorn.error")
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -22,6 +27,16 @@ app = FastAPI(
     description="Backend untuk proyek Bank Sampah (IoT, ML, Web)",
     version="1.0.0"
 )
+
+# Global Exception Handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error di {request.url}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Terjadi kesalahan di server. Coba lagi nanti."}
+    )
+
 # ========== CORSMiddleware ==========
 app.add_middleware(
     CORSMiddleware,
