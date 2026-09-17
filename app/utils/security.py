@@ -64,6 +64,8 @@ def get_current_nasabah(authorization: str = None) -> str:
     session = get_session(session_id)
     if not session:
         raise HTTPException(status_code=401, detail="Session tidak ditemukan/sudah expired, silakan login ulang")
+    if session.get("role") != "nasabah":
+        raise HTTPException(status_code=403, detail="Token ini bukan milik nasabah")
     refresh_session(session_id)
     return session["sub"]
 
@@ -73,6 +75,8 @@ def get_current_admin(authorization: str = None) -> dict:
     session = get_session(session_id)
     if not session:
         raise HTTPException(status_code=401, detail="Session tidak ditemukan/sudah expired, silakan login ulang")
+    if session.get("role") not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="Token ini bukan milik admin")
     refresh_session(session_id)
     return session  # {"sub": username, "role": "..."}
 

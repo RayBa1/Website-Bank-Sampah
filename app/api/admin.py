@@ -1,18 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.models import Admin, RoleAdmin
 from app.schemas.admin import AdminRegister, AdminResponse
-from app.utils.security import hash_password, require_super_admin
+from app.utils.security import hash_password, require_super_admin, get_current_admin
 
 router = APIRouter(prefix="/admin", tags=["Admin Fitur"])
 
 @router.get("/dashboard")
-def get_admin_dashboard():
+def get_admin_dashboard(authorization: str = Header(None)):
+    get_current_admin(authorization)
     return {"message": "Ini halaman dashboard Admin"}
 
 @router.get("/laporan")
-def get_laporan():
+def get_laporan(authorization: str = Header(None)):
+    get_current_admin(authorization)
     return {"message": "Ini daftar laporan transaksi untuk Admin"}
 
 

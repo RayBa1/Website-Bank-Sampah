@@ -40,7 +40,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ========== CORSMiddleware ==========
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://domain-frontend-kamu.com"],  # sesuaikan
+    allow_origins=[
+        "http://localhost:5173",  # frontend nasabah
+        "http://localhost:5174",  # frontend admin
+        "https://domain-frontend.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

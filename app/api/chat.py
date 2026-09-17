@@ -15,7 +15,7 @@ router = APIRouter(prefix="/chat", tags=["Livechat"])
 @router.websocket("/ws/nasabah")
 async def ws_chat_nasabah(websocket: WebSocket, token: str = Query(...), db: Session = Depends(get_db)):
     session = get_session(token)
-    if not session:
+    if not session or session.get("role") != "nasabah":
         await websocket.close(code=4401)
         return
     nik = session["sub"]

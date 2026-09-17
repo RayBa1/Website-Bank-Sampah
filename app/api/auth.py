@@ -101,7 +101,7 @@ def logout_nasabah(authorization: str = Header(None)):
 # ========== ADMIN: LOGIN STEP 1 (username + password → kirim OTP ke email) ==========
 @router.post("/admin/login")
 def login_admin(data: AdminLogin, db: Session = Depends(get_db)):
-    check_login_rate_limit(data.username) 
+    # check_login_rate_limit(data.username) 
     admin = db.query(Admin).filter(Admin.username == data.username).first()
 
     if not admin or not verify_password(data.password, admin.password):
@@ -110,7 +110,7 @@ def login_admin(data: AdminLogin, db: Session = Depends(get_db)):
     if not admin.email:
         raise HTTPException(status_code=400, detail="Akun ini belum punya email terdaftar, hubungi super admin")
 
-    check_otp_request_rate_limit(admin.email)
+    # check_otp_request_rate_limit(admin.email)
 
     kode_otp = OTPService.create_otp(db, admin.email)
     # send_otp_email(admin.email, kode_otp) # OPEN NANTIYA UNTUK KIRIM EMAIL, SEKARANG DI-LOG KE CONSOLE SAJA
@@ -155,7 +155,7 @@ def logout_admin(authorization: str = Header(None)):
 # ========== SUPER ADMIN: LOGIN STEP 1 (email + password → kirim OTP) ==========
 @router.post("/super-admin/login")
 def login_super_admin(data: SuperAdminLoginRequest, db: Session = Depends(get_db)):
-    check_login_rate_limit(data.username) 
+    # check_login_rate_limit(data.username) 
     admin = db.query(Admin).filter(
         Admin.email == data.email,
         Admin.role == RoleAdmin.super_admin
@@ -164,7 +164,7 @@ def login_super_admin(data: SuperAdminLoginRequest, db: Session = Depends(get_db
     if not admin or not verify_password(data.password, admin.password):
         raise HTTPException(status_code=401, detail="Email atau password salah")
 
-    check_otp_request_rate_limit(admin.email)
+    # check_otp_request_rate_limit(admin.email)
 
     kode_otp = OTPService.create_otp(db, admin.email)
 
@@ -216,7 +216,7 @@ def logout_super_admin(authorization: str = Header(None)):
 @router.post("/nasabah/login", response_model=LoginResponse)
 def login_nasabah_nik(data: NikLogin, db: Session = Depends(get_db)):
     """
-    ⚠️ Login nasabah HANYA pakai NIK, tanpa password/OTP.
+    Login nasabah HANYA pakai NIK, tanpa password/OTP.
     Ini permintaan client - secara keamanan ini lebih lemah dari OTP,
     karena NIK bukan data rahasia. Rate limiting diterapkan untuk mitigasi.
     """
@@ -232,7 +232,7 @@ def login_nasabah_nik(data: NikLogin, db: Session = Depends(get_db)):
 
     reset_login_rate_limit(data.nik)  # login sukses, reset counter
 
-    session_token = create_session(nasabah.nik)
+    session_token = create_session(nasabah.nik, extra={"role": "nasabah"})
     return LoginResponse(
         session_token=session_token,
         nik=nasabah.nik,

@@ -47,6 +47,20 @@ class TransaksiResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class TransaksiHistoryResponse(BaseModel):
+    """Dipakai untuk list riwayat transaksi (nasabah & admin) — tanpa saldo snapshot,
+    karena saldo 'sekarang' gak relevan ditampilkan per baris transaksi lama."""
+    id_transaksi: int
+    nik: str
+    tanggal_transaksi: datetime
+    total_berat: Decimal
+    total_nilai: Decimal
+    keterangan: Optional[str]
+    details: List[DetailTransaksiResponse]
+
+    class Config:
+        from_attributes = True
+
 # ========== SCHEMA KHUSUS IOT ==========
 
 class DetailTransaksiIoT(BaseModel):

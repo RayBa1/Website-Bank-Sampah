@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from decimal import Decimal
+from typing import Optional
+from datetime import date
 
 from app.core.database import get_db
-from app.models.models import Transaksi, DetailTransaksi, JenisSampah, Nasabah, DataIoT
-from app.schemas.transaksi import TransaksiCreate, TransaksiResponse, DetailTransaksiResponse, TransaksiIoTCreate
+from app.models.models import (Transaksi, DetailTransaksi, 
+                               JenisSampah, Nasabah, DataIoT)
+from app.schemas.transaksi import (TransaksiCreate, TransaksiResponse, DetailTransaksiResponse, 
+                                   TransaksiIoTCreate, TransaksiHistoryResponse)
 from app.utils.security import get_current_admin, get_current_nasabah, verify_iot_api_key
 
 router = APIRouter(prefix="/transaksi", tags=["Transaksi"])
@@ -88,7 +92,7 @@ def create_transaksi(
             subtotal=detail["subtotal"]
         ))
 
-    # ⭐ TAMBAH SALDO NASABAH — hanya bisa terjadi lewat jalur ini (admin only)
+    # TAMBAH SALDO NASABAH — hanya bisa terjadi lewat jalur ini (admin only)
     nasabah.saldo = nasabah.saldo + total_nilai
 
     db.commit()
@@ -106,21 +110,40 @@ def create_transaksi(
         details=detail_responses
     )
 
+# ========== ADMIN: LIHAT SEMUA RIWAYAT TRANSAKSI (BARU) ==========
+@router.get("/history-admin", response_model=list[TransaksiHistoryResponse])
+def get_history_admin(
+    authorization: str = Header(None),
+    db: Session = Depends(get_db),
+    nik: Optional[str] = None,
+    tanggal_mulai: Optional[date] = None,
+    tanggal_akhir: Optional[date] = None,
+    limit: int = 100,
+):
+    """Admin lihat semua riwayat transaksi, bisa difilter NIK & rentang tanggal."""
+    get_current_admin(authorization)
+    query = db.query(Transaksi)
+    if nik:
+        query = query.filter(Transaksi.nik == nik)
+    if tanggal_mulai:
+        query = query.filter(Transaksi.tanggal_transaksi >= tanggal_mulai)
+    if tanggal_akhir:
+        query = query.filter(Transaksi.tanggal_transaksi <= tanggal_akhir)
+    return query.order_by(Transaksi.tanggal_transaksi.desc()).limit(limit).all()
+
 
 # ========== NASABAH: LIHAT HISTORY TRANSAKSI SENDIRI ==========
-@router.get("/history", response_model=list[TransaksiResponse])
+@router.get("/history", response_model=list[TransaksiHistoryResponse])
 def get_history(
     authorization: str = Header(None),
     db: Session = Depends(get_db)
 ):
     """Nasabah lihat riwayat transaksi sendiri (pakai token nasabah)"""
     nik = get_current_nasabah(authorization)
-
     return db.query(Transaksi)\
         .filter(Transaksi.nik == nik)\
         .order_by(Transaksi.tanggal_transaksi.desc())\
         .all()
-
 
 # ========== IOT: BUAT TRANSAKSI OTOMATIS DARI DETEKSI ML ==========
 @router.post("/create-iot", response_model=TransaksiResponse)
