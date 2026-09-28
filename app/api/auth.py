@@ -1,14 +1,35 @@
+import os
 from fastapi import APIRouter, HTTPException, Depends, Header
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.models import Nasabah, Admin, RoleAdmin
 from app.schemas.auth import RequestOTP, VerifyOTP, OTPResponse, LoginResponse, NikLogin
 from app.schemas.admin import SuperAdminLoginRequest, SuperAdminVerifyOTP, AdminLogin, AdminVerifyOTP
-from app.utils.security import verify_password, create_session, delete_session, extract_session_id, check_login_rate_limit, reset_login_rate_limit, check_otp_request_rate_limit
+from app.utils.security import (
+    verify_password, create_session, delete_session, extract_session_id,
+    check_login_rate_limit, reset_login_rate_limit, check_otp_request_rate_limit
+)
 from app.utils.otp_service import OTPService
 from app.utils.email_service import send_otp_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+
+
+def kirim_otp(email: str, kode_otp: str, label: str = "OTP"):
+    """
+    Kondisional: development → cuma print ke console (nggak perlu buka email tiap testing).
+    Selain development (staging/production) → beneran kirim email.
+    Ganti ENVIRONMENT di .env buat switch, nggak perlu ubah kode ini.
+    """
+    if ENVIRONMENT == "development":
+        print(f"\n{'='*60}")
+        print(f" {label} untuk {email}: {kode_otp}")
+        print(f"{'='*60}\n")
+    else:
+        send_otp_email(email, kode_otp)
+
 
 # ========== [NONAKTIF] NASABAH: REQUEST OTP ==========
 
@@ -89,47 +110,42 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 #         message=" Login berhasil!"
 #     )
 
+
 @router.post("/nasabah/logout")
 def logout_nasabah(authorization: str = Header(None)):
-    """Logout nasabah - hapus session dari Redis"""
     session_id = extract_session_id(authorization)
     delete_session(session_id)
     return {"message": " Logout berhasil, sampai jumpa lagi!"}
 
-# ========== ADMIN: LOGIN ==========
 
-# ========== ADMIN: LOGIN STEP 1 (username + password → kirim OTP ke email) ==========
+# ========== ADMIN: LOGIN STEP 1 ==========
 @router.post("/admin/login")
 def login_admin(data: AdminLogin, db: Session = Depends(get_db)):
-    # check_login_rate_limit(data.username) 
-    admin = db.query(Admin).filter(Admin.username == data.username).first()
+    check_login_rate_limit(data.username)
 
+    admin = db.query(Admin).filter(Admin.username == data.username).first()
     if not admin or not verify_password(data.password, admin.password):
         raise HTTPException(status_code=401, detail="Username atau password salah")
 
     if not admin.email:
         raise HTTPException(status_code=400, detail="Akun ini belum punya email terdaftar, hubungi super admin")
 
-    # check_otp_request_rate_limit(admin.email)
+    check_otp_request_rate_limit(admin.email)
 
     kode_otp = OTPService.create_otp(db, admin.email)
-    # send_otp_email(admin.email, kode_otp) # OPEN NANTIYA UNTUK KIRIM EMAIL, SEKARANG DI-LOG KE CONSOLE SAJA
-
-    print(f"\n{'='*60}")
-    print(f" OTP Admin untuk {admin.email}: {kode_otp}")
-    print(f"{'='*60}\n")
+    kirim_otp(admin.email, kode_otp, label="OTP Admin")
 
     return {
         "message": " Password benar, OTP sudah dikirim ke email",
         "email": admin.email,
-        "description": f"Periksa email {admin.email} (Berlaku 5 menit). Untuk development, cek console."
+        "description": f"Periksa email {admin.email} (Berlaku 5 menit)."
     }
 
-# ========== ADMIN: LOGIN STEP 2 (verify OTP → session) ==========
+
+# ========== ADMIN: LOGIN STEP 2 ==========
 @router.post("/admin/verify-otp")
 def verify_admin_otp(data: AdminVerifyOTP, db: Session = Depends(get_db)):
     admin = db.query(Admin).filter(Admin.username == data.username).first()
-
     if not admin:
         raise HTTPException(status_code=404, detail=" Admin tidak ditemukan")
 
@@ -137,7 +153,6 @@ def verify_admin_otp(data: AdminVerifyOTP, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=" OTP salah atau sudah expired")
 
     session_token = create_session(admin.username, extra={"role": admin.role.value})
-
     return {
         "session_token": session_token,
         "token_type": "bearer",
@@ -145,17 +160,19 @@ def verify_admin_otp(data: AdminVerifyOTP, db: Session = Depends(get_db)):
         "message": " Login admin berhasil!"
     }
 
+
 @router.post("/admin/logout")
 def logout_admin(authorization: str = Header(None)):
-    """Logout admin - hapus session dari Redis"""
     session_id = extract_session_id(authorization)
     delete_session(session_id)
     return {"message": " Logout admin berhasil"}
 
-# ========== SUPER ADMIN: LOGIN STEP 1 (email + password → kirim OTP) ==========
+
+# ========== SUPER ADMIN: LOGIN STEP 1 ==========
 @router.post("/super-admin/login")
 def login_super_admin(data: SuperAdminLoginRequest, db: Session = Depends(get_db)):
-    # check_login_rate_limit(data.username) 
+    check_login_rate_limit(data.email)
+
     admin = db.query(Admin).filter(
         Admin.email == data.email,
         Admin.role == RoleAdmin.super_admin
@@ -164,25 +181,19 @@ def login_super_admin(data: SuperAdminLoginRequest, db: Session = Depends(get_db
     if not admin or not verify_password(data.password, admin.password):
         raise HTTPException(status_code=401, detail="Email atau password salah")
 
-    # check_otp_request_rate_limit(admin.email)
+    check_otp_request_rate_limit(admin.email)
 
     kode_otp = OTPService.create_otp(db, admin.email)
-
-    # send_otp_email(admin.email, kode_otp) # OPEN NANTIYA UNTUK KIRIM EMAIL, SEKARANG DI-LOG KE CONSOLE SAJA
-
-    print(f"\n{'='*60}")
-    print(f"OTP Super Admin untuk {admin.email}: {kode_otp}")
-    print(f"{'='*60}\n")
-    # Nanti diganti send_email(admin.email, ...)
+    kirim_otp(admin.email, kode_otp, label="OTP Super Admin")
 
     return {
         "message": "Password benar, OTP sudah dikirim ke email",
         "email": admin.email,
-        "description": f"Periksa email {admin.email} (Berlaku 5 menit). Untuk development, cek console."
+        "description": f"Periksa email {admin.email} (Berlaku 5 menit)."
     }
 
 
-# ========== SUPER ADMIN: LOGIN STEP 2 (verify OTP → session) ==========
+# ========== SUPER ADMIN: LOGIN STEP 2 ==========
 @router.post("/super-admin/verify-otp")
 def verify_super_admin_otp(data: SuperAdminVerifyOTP, db: Session = Depends(get_db)):
     admin = db.query(Admin).filter(
@@ -197,7 +208,6 @@ def verify_super_admin_otp(data: SuperAdminVerifyOTP, db: Session = Depends(get_
         raise HTTPException(status_code=401, detail="OTP salah atau sudah expired")
 
     session_token = create_session(admin.username, extra={"role": admin.role.value})
-
     return {
         "session_token": session_token,
         "token_type": "bearer",
@@ -212,25 +222,19 @@ def logout_super_admin(authorization: str = Header(None)):
     delete_session(session_id)
     return {"message": " Logout super admin berhasil"}
 
-# ========== NASABAH: LOGIN LANGSUNG PAKAI NIK (TANPA OTP/PASSWORD) ==========
+
+# ========== NASABAH: LOGIN LANGSUNG PAKAI NIK ==========
 @router.post("/nasabah/login", response_model=LoginResponse)
 def login_nasabah_nik(data: NikLogin, db: Session = Depends(get_db)):
-    """
-    Login nasabah HANYA pakai NIK, tanpa password/OTP.
-    Ini permintaan client - secara keamanan ini lebih lemah dari OTP,
-    karena NIK bukan data rahasia. Rate limiting diterapkan untuk mitigasi.
-    """
     check_login_rate_limit(data.nik)
 
     nasabah = db.query(Nasabah).filter(Nasabah.nik == data.nik).first()
-
     if not nasabah:
         raise HTTPException(status_code=404, detail=" NIK tidak terdaftar. Silakan daftar terlebih dahulu.")
-
     if not nasabah.is_active:
         raise HTTPException(status_code=403, detail=" Akun Anda telah dinonaktifkan. Hubungi admin.")
 
-    reset_login_rate_limit(data.nik)  # login sukses, reset counter
+    reset_login_rate_limit(data.nik)
 
     session_token = create_session(nasabah.nik, extra={"role": "nasabah"})
     return LoginResponse(
