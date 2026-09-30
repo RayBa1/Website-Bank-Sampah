@@ -290,3 +290,10 @@ class PesanChat(Base):
     isi_pesan = Column(Text, nullable=False)
     is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class ChatAssignment(Base):
+    __tablename__ = "chat_assignment"
+
+    nik_nasabah = Column(String, ForeignKey("nasabah.nik"), primary_key=True)
+    admin_username = Column(String, nullable=False)
+    claimed_at = Column(DateTime, default=datetime.utcnow)
