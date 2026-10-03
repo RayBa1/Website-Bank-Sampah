@@ -73,6 +73,7 @@ app.include_router(transaksi_jual_mitra.router)     # /transaksi-jual-mitra
 app.include_router(admin_faq.router)                # /admin/faq
 app.include_router(nasabah_faq.router)              # /faq
 app.include_router(chat.router)                     # /livechat
+app.include_router(iot_ml.router)                   # /iot-ml
 
 # ========== HEALTH CHECK ENDPOINT ==========
 
