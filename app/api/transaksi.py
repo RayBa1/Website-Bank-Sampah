@@ -1,20 +1,102 @@
+import base64
+import os
+import uuid
+from datetime import date, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from decimal import Decimal
 from typing import Optional
-from datetime import date
 
 from app.core.database import get_db
-from app.models.models import (Transaksi, DetailTransaksi, 
+from app.models.models import (Transaksi, DetailTransaksi,
                                JenisSampah, Nasabah, DataIoT)
-from app.schemas.transaksi import (TransaksiCreate, TransaksiResponse, DetailTransaksiResponse, 
-                                   TransaksiIoTCreate, TransaksiHistoryResponse)
+from app.schemas.transaksi import (TransaksiCreate, TransaksiResponse, DetailTransaksiResponse,
+                                   TransaksiIoTCreate, TransaksiHistoryResponse,
+                                   DetailTransaksiCreate, DetailTransaksiUpdate)
 from app.utils.security import get_current_admin, get_current_nasabah, verify_iot_api_key
 
 router = APIRouter(prefix="/transaksi", tags=["Transaksi"])
 
+# ========== KONSTAN & HELPER ==========
 
-# ========== ADMIN: BUAT TRANSAKSI SETORAN SAMPAH ==========
+CONFIDENCE_THRESHOLD = Decimal("80")
+
+UPLOAD_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "static", "uploads", "sampah"
+)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+def _save_base64_image(base64_str: Optional[str]) -> Optional[str]:
+    """Decode base64 foto dari IoT dan simpan ke /static/uploads/sampah/. Return URL relatif, atau None kalau kosong/gagal."""
+    if not base64_str:
+        return None
+    try:
+        if "," in base64_str and base64_str.strip().startswith("data:"):
+            base64_str = base64_str.split(",", 1)[1]
+        image_bytes = base64.b64decode(base64_str)
+        filename = f"{uuid.uuid4().hex}.jpg"
+        filepath = os.path.join(UPLOAD_DIR, filename)
+        with open(filepath, "wb") as f:
+            f.write(image_bytes)
+        return f"/static/uploads/sampah/{filename}"
+    except Exception:
+        return None
+
+
+def _serialize_detail(detail: DetailTransaksi, db: Session) -> DetailTransaksiResponse:
+    """Gabungkan 1 item DetailTransaksi dengan data IoT terkait (kalau ada) + status flag."""
+    data_iot = (
+        db.query(DataIoT)
+        .filter(DataIoT.id_detail == detail.id_detail)
+        .first()
+    )
+    confidence = data_iot.confidence if data_iot else None
+    is_flagged = confidence is not None and confidence < CONFIDENCE_THRESHOLD
+
+    return DetailTransaksiResponse(
+        id_detail=detail.id_detail,
+        id_jenis=detail.id_jenis,
+        nama_jenis=detail.jenis_sampah.nama_jenis if detail.jenis_sampah else None,
+        berat=detail.berat,
+        harga_per_kg=detail.harga_per_kg,
+        subtotal=detail.subtotal,
+        jenis_terdeteksi=data_iot.jenis_terdeteksi if data_iot else None,
+        confidence=confidence,
+        foto_url=data_iot.foto_url if data_iot else None,
+        is_flagged=is_flagged,
+        ditambahkan_manual=detail.ditambahkan_manual,
+        dikoreksi_oleh=detail.dikoreksi_oleh,
+        dikoreksi_at=detail.dikoreksi_at,
+    )
+
+
+def _recompute_totals(transaksi: Transaksi, db: Session):
+    """Hitung ulang total_berat & total_nilai transaksi dari semua detail-nya saat ini."""
+    details = db.query(DetailTransaksi).filter(DetailTransaksi.id_transaksi == transaksi.id_transaksi).all()
+    transaksi.total_berat = sum((d.berat for d in details), Decimal(0))
+    transaksi.total_nilai = sum((d.subtotal for d in details), Decimal(0))
+
+
+def _to_history_response(transaksi: Transaksi, db: Session) -> TransaksiHistoryResponse:
+    nasabah = db.query(Nasabah).filter(Nasabah.nik == transaksi.nik).first()
+    details = [_serialize_detail(d, db) for d in transaksi.details]
+    return TransaksiHistoryResponse(
+        id_transaksi=transaksi.id_transaksi,
+        nik=transaksi.nik,
+        nama_nasabah=nasabah.nama_nasabah if nasabah else None,
+        tanggal_transaksi=transaksi.tanggal_transaksi,
+        total_berat=transaksi.total_berat,
+        total_nilai=transaksi.total_nilai,
+        keterangan=transaksi.keterangan,
+        ada_flag=any(d.is_flagged for d in details),
+        details=details,
+    )
+
+
+# ========== ADMIN: BUAT TRANSAKSI SETORAN SAMPAH (MANUAL) ==========
 @router.post("/create", response_model=TransaksiResponse)
 def create_transaksi(
     data: TransaksiCreate,
@@ -27,14 +109,11 @@ def create_transaksi(
     supaya harga tidak bisa dimanipulasi.
     Saldo nasabah otomatis bertambah sesuai total_nilai.
     """
-    # Pastikan yang akses adalah admin (bukan nasabah)
     get_current_admin(authorization)
 
-    # Validasi nasabah ada
     nasabah = db.query(Nasabah).filter(Nasabah.nik == data.nik).first()
     if not nasabah:
-        raise HTTPException(status_code=404, detail="~~Nasabah dengan NIK tersebut tidak ditemukan")
-
+        raise HTTPException(status_code=404, detail="Nasabah dengan NIK tersebut tidak ditemukan")
     if not nasabah.is_active:
         raise HTTPException(status_code=403, detail="Akun nasabah ini sedang dinonaktifkan")
 
@@ -42,7 +121,6 @@ def create_transaksi(
     total_nilai = Decimal(0)
     detail_list = []
 
-    # Validasi jenis sampah & hitung total (harga_per_kg SELALU dari DB, bukan dari body)
     for item in data.detail:
         jenis = db.query(JenisSampah).filter(JenisSampah.id_jenis == item.id_jenis).first()
         if not jenis:
@@ -55,13 +133,11 @@ def create_transaksi(
 
         detail_list.append({
             "id_jenis": item.id_jenis,
-            "nama_jenis": jenis.nama_jenis,
             "berat": item.berat,
             "harga_per_kg": harga_per_kg,
             "subtotal": subtotal
         })
 
-    # Buat transaksi
     transaksi = Transaksi(
         nik=data.nik,
         total_berat=total_berat,
@@ -69,9 +145,8 @@ def create_transaksi(
         keterangan=data.keterangan
     )
     db.add(transaksi)
-    db.flush()  # supaya dapat id_transaksi sebelum commit
+    db.flush()
 
-    # Buat detail transaksi
     detail_responses = []
     for detail in detail_list:
         detail_transaksi = DetailTransaksi(
@@ -83,18 +158,9 @@ def create_transaksi(
         )
         db.add(detail_transaksi)
         db.flush()
-        detail_responses.append(DetailTransaksiResponse(
-            id_detail=detail_transaksi.id_detail,
-            id_jenis=detail["id_jenis"],
-            nama_jenis=detail["nama_jenis"],
-            berat=detail["berat"],
-            harga_per_kg=detail["harga_per_kg"],
-            subtotal=detail["subtotal"]
-        ))
+        detail_responses.append(_serialize_detail(detail_transaksi, db))
 
-    # TAMBAH SALDO NASABAH — hanya bisa terjadi lewat jalur ini (admin only)
     nasabah.saldo = nasabah.saldo + total_nilai
-
     db.commit()
     db.refresh(transaksi)
     db.refresh(nasabah)
@@ -110,7 +176,8 @@ def create_transaksi(
         details=detail_responses
     )
 
-# ========== ADMIN: LIHAT SEMUA RIWAYAT TRANSAKSI (BARU) ==========
+
+# ========== ADMIN: LIHAT SEMUA RIWAYAT TRANSAKSI ==========
 @router.get("/history-admin", response_model=list[TransaksiHistoryResponse])
 def get_history_admin(
     authorization: str = Header(None),
@@ -120,8 +187,9 @@ def get_history_admin(
     tanggal_akhir: Optional[date] = None,
     limit: int = 100,
 ):
-    """Admin lihat semua riwayat transaksi, bisa difilter NIK & rentang tanggal."""
+    """Admin lihat semua riwayat transaksi (semua nasabah), lengkap dengan status flag per item."""
     get_current_admin(authorization)
+
     query = db.query(Transaksi)
     if nik:
         query = query.filter(Transaksi.nik == nik)
@@ -129,7 +197,25 @@ def get_history_admin(
         query = query.filter(Transaksi.tanggal_transaksi >= tanggal_mulai)
     if tanggal_akhir:
         query = query.filter(Transaksi.tanggal_transaksi <= tanggal_akhir)
-    return query.order_by(Transaksi.tanggal_transaksi.desc()).limit(limit).all()
+
+    transaksi_list = query.order_by(Transaksi.tanggal_transaksi.desc()).limit(limit).all()
+    return [_to_history_response(t, db) for t in transaksi_list]
+
+
+# ========== ADMIN: DETAIL SATU TRANSAKSI (buat modal review) ==========
+@router.get("/{id_transaksi}", response_model=TransaksiHistoryResponse)
+def get_transaksi_detail(
+    id_transaksi: int,
+    authorization: str = Header(None),
+    db: Session = Depends(get_db),
+):
+    get_current_admin(authorization)
+
+    transaksi = db.query(Transaksi).filter(Transaksi.id_transaksi == id_transaksi).first()
+    if not transaksi:
+        raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
+
+    return _to_history_response(transaksi, db)
 
 
 # ========== NASABAH: LIHAT HISTORY TRANSAKSI SENDIRI ==========
@@ -140,10 +226,12 @@ def get_history(
 ):
     """Nasabah lihat riwayat transaksi sendiri (pakai token nasabah)"""
     nik = get_current_nasabah(authorization)
-    return db.query(Transaksi)\
+    transaksi_list = db.query(Transaksi)\
         .filter(Transaksi.nik == nik)\
         .order_by(Transaksi.tanggal_transaksi.desc())\
         .all()
+    return [_to_history_response(t, db) for t in transaksi_list]
+
 
 # ========== IOT: BUAT TRANSAKSI OTOMATIS DARI DETEKSI ML ==========
 @router.post("/create-iot", response_model=TransaksiResponse)
@@ -155,12 +243,11 @@ def create_transaksi_iot(
     """
     Endpoint khusus device IoT untuk mencatat transaksi otomatis.
     Auth pakai API Key (header X-API-Key), BUKAN session token admin.
-    Setiap item juga dicatat ke tabel data_iot untuk jejak audit hasil ML.
+    Setiap item dicatat ke tabel data_iot (link presisi ke id_detail) untuk jejak audit hasil ML.
     """
     nasabah = db.query(Nasabah).filter(Nasabah.nik == data.nik).first()
     if not nasabah:
         raise HTTPException(status_code=404, detail="Nasabah dengan NIK tersebut tidak ditemukan")
-
     if not nasabah.is_active:
         raise HTTPException(status_code=403, detail="Akun nasabah ini sedang dinonaktifkan")
 
@@ -180,12 +267,12 @@ def create_transaksi_iot(
 
         detail_list.append({
             "id_jenis": item.id_jenis,
-            "nama_jenis": jenis.nama_jenis,
             "berat": item.berat,
             "harga_per_kg": harga_per_kg,
             "subtotal": subtotal,
             "jenis_terdeteksi": item.jenis_terdeteksi,
-            "confidence": item.confidence
+            "confidence": item.confidence,
+            "foto_base64": item.foto_base64,
         })
 
     transaksi = Transaksi(
@@ -207,28 +294,24 @@ def create_transaksi_iot(
             subtotal=detail["subtotal"]
         )
         db.add(detail_transaksi)
+        db.flush()  # perlu id_detail sebelum dipakai DataIoT
 
-        # Catat jejak deteksi ML ke tabel data_iot
+        foto_url = _save_base64_image(detail["foto_base64"])
+
         data_iot = DataIoT(
             id_transaksi=transaksi.id_transaksi,
+            id_detail=detail_transaksi.id_detail,
             jenis_terdeteksi=detail["jenis_terdeteksi"],
             berat_sensor=detail["berat"],
-            confidence=detail["confidence"]
+            confidence=detail["confidence"],
+            foto_url=foto_url,
         )
         db.add(data_iot)
         db.flush()
 
-        detail_responses.append(DetailTransaksiResponse(
-            id_detail=detail_transaksi.id_detail,
-            id_jenis=detail["id_jenis"],
-            nama_jenis=detail["nama_jenis"],
-            berat=detail["berat"],
-            harga_per_kg=detail["harga_per_kg"],
-            subtotal=detail["subtotal"]
-        ))
+        detail_responses.append(_serialize_detail(detail_transaksi, db))
 
     nasabah.saldo = nasabah.saldo + total_nilai
-
     db.commit()
     db.refresh(transaksi)
     db.refresh(nasabah)
@@ -243,3 +326,145 @@ def create_transaksi_iot(
         saldo_nasabah_sekarang=nasabah.saldo,
         details=detail_responses
     )
+
+
+# ========== ADMIN: EDIT 1 ITEM SAMPAH DALAM TRANSAKSI ==========
+@router.put("/{id_transaksi}/detail/{id_detail}", response_model=DetailTransaksiResponse)
+def update_detail_transaksi(
+    id_transaksi: int,
+    id_detail: int,
+    data: DetailTransaksiUpdate,
+    authorization: str = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Admin koreksi manual 1 item sampah (misal hasil deteksi ML salah / confidence rendah)."""
+    admin_session = get_current_admin(authorization)
+    admin_username = admin_session["sub"]
+
+    transaksi = db.query(Transaksi).filter(Transaksi.id_transaksi == id_transaksi).first()
+    if not transaksi:
+        raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
+
+    detail = db.query(DetailTransaksi).filter(
+        DetailTransaksi.id_detail == id_detail,
+        DetailTransaksi.id_transaksi == id_transaksi,
+    ).first()
+    if not detail:
+        raise HTTPException(status_code=404, detail="Item sampah tidak ditemukan di transaksi ini")
+
+    nasabah = db.query(Nasabah).filter(Nasabah.nik == transaksi.nik).first()
+    subtotal_lama = detail.subtotal
+
+    if data.id_jenis is not None:
+        jenis = db.query(JenisSampah).filter(JenisSampah.id_jenis == data.id_jenis).first()
+        if not jenis:
+            raise HTTPException(status_code=404, detail="Jenis sampah tidak ditemukan")
+        detail.id_jenis = jenis.id_jenis
+        detail.harga_per_kg = jenis.harga_per_kg
+
+    if data.berat is not None:
+        detail.berat = data.berat
+
+    detail.subtotal = detail.berat * detail.harga_per_kg
+    detail.dikoreksi_oleh = admin_username
+    detail.dikoreksi_at = datetime.utcnow()
+
+    # Selisih nilai disesuaikan ke saldo nasabah supaya tetap akurat
+    selisih = detail.subtotal - subtotal_lama
+    if nasabah:
+        nasabah.saldo = nasabah.saldo + selisih
+
+    _recompute_totals(transaksi, db)
+    db.commit()
+    db.refresh(detail)
+
+    return _serialize_detail(detail, db)
+
+
+# ========== ADMIN: HAPUS 1 ITEM SAMPAH DALAM TRANSAKSI ==========
+@router.delete("/{id_transaksi}/detail/{id_detail}")
+def delete_detail_transaksi(
+    id_transaksi: int,
+    id_detail: int,
+    authorization: str = Header(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Admin hapus 1 item sampah yang salah deteksi.
+    CATATAN: penyesuaian saldo nasabah akibat penghapusan sengaja BELUM ditangani di sini
+    (menyusul sesuai permintaan - akan dikerjakan di iterasi berikutnya).
+    """
+    get_current_admin(authorization)
+
+    transaksi = db.query(Transaksi).filter(Transaksi.id_transaksi == id_transaksi).first()
+    if not transaksi:
+        raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
+
+    jumlah_item = db.query(DetailTransaksi).filter(DetailTransaksi.id_transaksi == id_transaksi).count()
+    if jumlah_item <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Tidak bisa menghapus item terakhir dalam transaksi."
+        )
+
+    detail = db.query(DetailTransaksi).filter(
+        DetailTransaksi.id_detail == id_detail,
+        DetailTransaksi.id_transaksi == id_transaksi,
+    ).first()
+    if not detail:
+        raise HTTPException(status_code=404, detail="Item sampah tidak ditemukan di transaksi ini")
+
+    db.query(DataIoT).filter(DataIoT.id_detail == id_detail).delete()
+    db.delete(detail)
+    db.flush()
+
+    _recompute_totals(transaksi, db)
+    db.commit()
+
+    return {"message": "Item sampah berhasil dihapus."}
+
+
+# ========== ADMIN: TAMBAH ITEM SAMPAH BARU KE TRANSAKSI ==========
+@router.post("/{id_transaksi}/detail", response_model=DetailTransaksiResponse)
+def add_detail_transaksi(
+    id_transaksi: int,
+    data: DetailTransaksiCreate,
+    authorization: str = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Admin tambah manual 1 item sampah baru ke transaksi yang sudah ada (misal ada sampah yang kelewat terdeteksi)."""
+    admin_session = get_current_admin(authorization)
+    admin_username = admin_session["sub"]
+
+    transaksi = db.query(Transaksi).filter(Transaksi.id_transaksi == id_transaksi).first()
+    if not transaksi:
+        raise HTTPException(status_code=404, detail="Transaksi tidak ditemukan")
+
+    jenis = db.query(JenisSampah).filter(JenisSampah.id_jenis == data.id_jenis).first()
+    if not jenis:
+        raise HTTPException(status_code=404, detail="Jenis sampah tidak ditemukan")
+
+    subtotal = data.berat * jenis.harga_per_kg
+
+    detail = DetailTransaksi(
+        id_transaksi=id_transaksi,
+        id_jenis=jenis.id_jenis,
+        berat=data.berat,
+        harga_per_kg=jenis.harga_per_kg,
+        subtotal=subtotal,
+        ditambahkan_manual=True,
+        dikoreksi_oleh=admin_username,
+        dikoreksi_at=datetime.utcnow(),
+    )
+    db.add(detail)
+
+    nasabah = db.query(Nasabah).filter(Nasabah.nik == transaksi.nik).first()
+    if nasabah:
+        nasabah.saldo = nasabah.saldo + subtotal
+
+    db.flush()
+    _recompute_totals(transaksi, db)
+    db.commit()
+    db.refresh(detail)
+
+    return _serialize_detail(detail, db)

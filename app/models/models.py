@@ -127,6 +127,10 @@ class DetailTransaksi(Base):
     berat = Column(Numeric(10, 2), nullable=False)
     harga_per_kg = Column(Numeric(12, 2), nullable=False, comment="Harga saat transaksi")
     subtotal = Column(Numeric(15, 2), nullable=False, comment="Berat × harga_per_kg")
+
+    ditambahkan_manual = Column(Boolean, default=False, nullable=False)
+    dikoreksi_oleh = Column(String(50), nullable=True)
+    dikoreksi_at = Column(DateTime, nullable=True)
     
     # Relasi
     transaksi = relationship("Transaksi", back_populates="details")
@@ -215,9 +219,11 @@ class DataIoT(Base):
     
     id_data_iot = Column(Integer, primary_key=True, autoincrement=True)
     id_transaksi = Column(Integer, ForeignKey("transaksi.id_transaksi"), nullable=True)
+    id_detail = Column(Integer, ForeignKey("detail_transaksi.id_detail"), nullable=True)
     jenis_terdeteksi = Column(String(100), nullable=True, comment="Hasil deteksi ML")
     berat_sensor = Column(Numeric(10, 2), nullable=True, comment="Berat dari sensor")
     confidence = Column(Numeric(5, 2), nullable=True, comment="Confidence level deteksi")
+    foto_url = Column(String(255), nullable=True, comment="URL foto hasil capture kamera IoT")
     waktu_scan = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     # Relasi

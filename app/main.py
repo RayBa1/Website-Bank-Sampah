@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 import os
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import logging
 
 # Import database & models
@@ -49,6 +50,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ========== STATIC FILES ==========
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+os.makedirs(os.path.join(STATIC_DIR, "uploads", "sampah"), exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # ========== INCLUDE ROUTERS ==========
 app.include_router(auth.router)                     # /auth

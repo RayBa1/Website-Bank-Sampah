@@ -12,6 +12,11 @@ class DetailTransaksiCreate(BaseModel):
     id_jenis: int = Field(..., gt=0, description="ID jenis sampah dari dropdown")
     berat: Decimal = Field(..., gt=0, decimal_places=2, description="Berat sampah dalam KG")
 
+class DetailTransaksiUpdate(BaseModel):
+    """Admin koreksi 1 item sampah (partial update)."""
+    id_jenis: Optional[int] = Field(None, gt=0)
+    berat: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+
 
 class TransaksiCreate(BaseModel):
     """Dipakai ADMIN untuk mencatat transaksi setoran sampah nasabah"""
@@ -29,6 +34,14 @@ class DetailTransaksiResponse(BaseModel):
     berat: Decimal
     harga_per_kg: Decimal
     subtotal: Decimal
+
+    jenis_terdeteksi: Optional[str] = None
+    confidence: Optional[Decimal] = None
+    foto_url: Optional[str] = None
+    is_flagged: bool = False
+    ditambahkan_manual: bool = False
+    dikoreksi_oleh: Optional[str] = None
+    dikoreksi_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -52,10 +65,12 @@ class TransaksiHistoryResponse(BaseModel):
     karena saldo 'sekarang' gak relevan ditampilkan per baris transaksi lama."""
     id_transaksi: int
     nik: str
+    nama_nasabah: Optional[str] = None
     tanggal_transaksi: datetime
     total_berat: Decimal
     total_nilai: Decimal
     keterangan: Optional[str]
+    ada_flag: bool = False
     details: List[DetailTransaksiResponse]
 
     class Config:
@@ -65,14 +80,15 @@ class TransaksiHistoryResponse(BaseModel):
 
 class DetailTransaksiIoT(BaseModel):
     """Detail sampah yang terdeteksi ML, termasuk confidence score"""
-    id_jenis: int = Field(..., gt=0, description="ID jenis sampah hasil mapping dari deteksi ML")
-    berat: Decimal = Field(..., gt=0, decimal_places=2, description="Berat dari sensor (KG)")
-    jenis_terdeteksi: Optional[str] = Field(None, description="Label mentah hasil deteksi ML, misal 'plastic_bottle'")
-    confidence: Optional[Decimal] = Field(None, ge=0, le=100, decimal_places=2, description="Confidence level ML dalam persen (0-100)")
-
+    id_jenis: int = Field(..., gt=0)
+    berat: Decimal = Field(..., gt=0, decimal_places=2)
+    jenis_terdeteksi: Optional[str] = None
+    confidence: Optional[Decimal] = Field(None, ge=0, le=100, decimal_places=2)
+    foto_base64: Optional[str] = Field(None, description="Foto hasil capture, base64 (boleh dengan prefix data:image/...)")
 
 class TransaksiIoTCreate(BaseModel):
     """Dipakai oleh device IoT untuk mencatat transaksi otomatis dari hasil deteksi ML"""
     nik: str = Field(..., min_length=16, max_length=16, description="NIK nasabah yang menyetor sampah")
     detail: List[DetailTransaksiIoT] = Field(..., min_length=1)
     keterangan: Optional[str] = None
+

@@ -158,6 +158,7 @@ def verify_admin_otp(data: AdminVerifyOTP, db: Session = Depends(get_db)):
         "token_type": "bearer",
         "role": admin.role.value,
         "username": admin.username,
+        "nama_admin": admin.nama_admin,
         "message": " Login admin berhasil!"
     }
 
@@ -214,6 +215,7 @@ def verify_super_admin_otp(data: SuperAdminVerifyOTP, db: Session = Depends(get_
         "token_type": "bearer",
         "role": admin.role.value,
         "username": admin.username,
+        "nama_admin": admin.nama_admin,
         "message": " Login super admin berhasil!"
     }
 
