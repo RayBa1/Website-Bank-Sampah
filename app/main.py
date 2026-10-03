@@ -11,7 +11,9 @@ from app.core.database import engine, Base
 from app.models import models
 
 # Import routers
-from app.api import admin, nasabah, auth, transaksi, pengumuman, jenis_sampah, admin_nasabah, mitra_pengepul, transaksi_jual_mitra, admin_faq, nasabah_faq, chat
+from app.api import (admin, nasabah, auth, transaksi, pengumuman, 
+                     jenis_sampah, admin_nasabah, mitra_pengepul, transaksi_jual_mitra, 
+                     admin_faq, nasabah_faq, chat, iot_ml)
 
 # Load .env
 load_dotenv()

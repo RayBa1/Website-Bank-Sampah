@@ -95,6 +95,7 @@ class JenisSampah(Base):
     nama_jenis = Column(String(100), nullable=False)
     kategori = Column(String(50), nullable=True)
     harga_per_kg = Column(Numeric(12, 2), nullable=False)
+    kode_ml = Column(String(50), unique=True, nullable=True, comment="Label dari model ML, contoh: metal_can")
     
     # Relasi
     detail_transaksi = relationship("DetailTransaksi", back_populates="jenis_sampah")
@@ -303,3 +304,30 @@ class ChatAssignment(Base):
     nik_nasabah = Column(String, ForeignKey("nasabah.nik"), primary_key=True)
     admin_username = Column(String, nullable=False)
     claimed_at = Column(DateTime, default=datetime.utcnow)
+
+class StatusScan(str, enum.Enum):
+    menunggu = "menunggu"          # baru satu sisi (IoT atau ML) yang masuk
+    selesai = "selesai"            # kedua sisi lengkap -> sudah jadi Transaksi
+    kadaluarsa = "kadaluarsa"      # sisi satunya tidak datang dalam batas waktu
+    butuh_review = "butuh_review"  # lengkap, tapi NIK kosong / label ML tidak dikenal
+
+class ScanPending(Base):
+    """Buffer: satu baris diisi dari dua sumber (IoT = berat, ML = jenis). Jadi Transaksi saat lengkap."""
+    __tablename__ = "scan_pending"
+ 
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    machine_id = Column(String(50), nullable=False, index=True)
+    scan_id = Column(String(64), nullable=True, index=True, comment="Opsional, kalau IoT & ML sepakat satu ID")
+    nik = Column(CHAR(16), nullable=True)
+ 
+    # sisi IoT
+    berat = Column(Numeric(10, 2), nullable=True)
+    # sisi ML
+    jenis_terdeteksi = Column(String(100), nullable=True)
+    confidence = Column(Numeric(5, 2), nullable=True)
+    foto_url = Column(String(255), nullable=True)
+ 
+    status = Column(SQLEnum(StatusScan), default=StatusScan.menunggu, nullable=False, index=True)
+    id_transaksi = Column(Integer, ForeignKey("transaksi.id_transaksi"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

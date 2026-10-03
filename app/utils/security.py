@@ -8,6 +8,7 @@ from app.core.redis_client import redis_client
 SESSION_EXPIRE_SECONDS = 60 * 60 * 24  # 24 jam, sama seperti sebelumnya
 
 IOT_API_KEY = os.getenv("IOT_API_KEY")
+ML_API_KEY = os.getenv("ML_API_KEY")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 LOGIN_RATE_LIMIT_MAX = 5                    # maksimal percobaan
@@ -105,6 +106,13 @@ def verify_iot_api_key(x_api_key: str = Header(None)) -> None:
     if not IOT_API_KEY:
         raise HTTPException(status_code=500, detail="IOT_API_KEY belum dikonfigurasi di server")
     if not x_api_key or x_api_key != IOT_API_KEY:
+        raise HTTPException(status_code=401, detail="API Key tidak valid")
+
+def verify_ml_api_key(x_api_key: str = Header(None)) -> None:
+    """Dependency: pastikan request datang dari tim ML (API key terpisah dari IoT)"""
+    if not ML_API_KEY:
+        raise HTTPException(status_code=500, detail="ML_API_KEY belum dikonfigurasi di server")
+    if not x_api_key or not secrets.compare_digest(x_api_key, ML_API_KEY):
         raise HTTPException(status_code=401, detail="API Key tidak valid")
 
 def check_login_rate_limit(identifier: str):

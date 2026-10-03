@@ -234,88 +234,77 @@ def get_history(
 
 
 # ========== IOT: BUAT TRANSAKSI OTOMATIS DARI DETEKSI ML ==========
-@router.post("/create-iot", response_model=TransaksiResponse)
-def create_transaksi_iot(
-    data: TransaksiIoTCreate,
-    db: Session = Depends(get_db),
-    _: None = Depends(verify_iot_api_key)
-):
+def buat_transaksi_iot(
+    db: Session,
+    nik: str,
+    items: list[dict],
+    keterangan: Optional[str] = None,
+) -> TransaksiResponse:
     """
-    Endpoint khusus device IoT untuk mencatat transaksi otomatis.
-    Auth pakai API Key (header X-API-Key), BUKAN session token admin.
-    Setiap item dicatat ke tabel data_iot (link presisi ke id_detail) untuk jejak audit hasil ML.
+    Logika inti pembuatan transaksi otomatis (dipakai /create-iot dan penggabung IoT+ML).
+    TIDAK commit -> caller yang commit, supaya bisa atomic dengan update status scan.
+ 
+    items: list dict dengan key:
+        id_jenis, berat, jenis_terdeteksi (opsional), confidence (opsional), foto_url (opsional)
     """
-    nasabah = db.query(Nasabah).filter(Nasabah.nik == data.nik).first()
+    nasabah = db.query(Nasabah).filter(Nasabah.nik == nik).first()
     if not nasabah:
         raise HTTPException(status_code=404, detail="Nasabah dengan NIK tersebut tidak ditemukan")
     if not nasabah.is_active:
         raise HTTPException(status_code=403, detail="Akun nasabah ini sedang dinonaktifkan")
-
+ 
     total_berat = Decimal(0)
     total_nilai = Decimal(0)
     detail_list = []
-
-    for item in data.detail:
-        jenis = db.query(JenisSampah).filter(JenisSampah.id_jenis == item.id_jenis).first()
+ 
+    for item in items:
+        jenis = db.query(JenisSampah).filter(JenisSampah.id_jenis == item["id_jenis"]).first()
         if not jenis:
-            raise HTTPException(status_code=404, detail=f"Jenis sampah id {item.id_jenis} tidak ditemukan")
-
+            raise HTTPException(status_code=404, detail=f"Jenis sampah id {item['id_jenis']} tidak ditemukan")
+ 
         harga_per_kg = jenis.harga_per_kg
-        subtotal = item.berat * harga_per_kg
-        total_berat += item.berat
+        subtotal = item["berat"] * harga_per_kg
+        total_berat += item["berat"]
         total_nilai += subtotal
-
-        detail_list.append({
-            "id_jenis": item.id_jenis,
-            "berat": item.berat,
-            "harga_per_kg": harga_per_kg,
-            "subtotal": subtotal,
-            "jenis_terdeteksi": item.jenis_terdeteksi,
-            "confidence": item.confidence,
-            "foto_base64": item.foto_base64,
-        })
-
+ 
+        detail_list.append({**item, "harga_per_kg": harga_per_kg, "subtotal": subtotal})
+ 
     transaksi = Transaksi(
-        nik=data.nik,
+        nik=nik,
         total_berat=total_berat,
         total_nilai=total_nilai,
-        keterangan=data.keterangan or "Transaksi otomatis dari IoT"
+        keterangan=keterangan or "Transaksi otomatis dari IoT",
     )
     db.add(transaksi)
     db.flush()
-
+ 
     detail_responses = []
-    for detail in detail_list:
+    for d in detail_list:
         detail_transaksi = DetailTransaksi(
             id_transaksi=transaksi.id_transaksi,
-            id_jenis=detail["id_jenis"],
-            berat=detail["berat"],
-            harga_per_kg=detail["harga_per_kg"],
-            subtotal=detail["subtotal"]
+            id_jenis=d["id_jenis"],
+            berat=d["berat"],
+            harga_per_kg=d["harga_per_kg"],
+            subtotal=d["subtotal"],
         )
         db.add(detail_transaksi)
         db.flush()  # perlu id_detail sebelum dipakai DataIoT
-
-        foto_url = _save_base64_image(detail["foto_base64"])
-
-        data_iot = DataIoT(
+ 
+        db.add(DataIoT(
             id_transaksi=transaksi.id_transaksi,
             id_detail=detail_transaksi.id_detail,
-            jenis_terdeteksi=detail["jenis_terdeteksi"],
-            berat_sensor=detail["berat"],
-            confidence=detail["confidence"],
-            foto_url=foto_url,
-        )
-        db.add(data_iot)
+            jenis_terdeteksi=d.get("jenis_terdeteksi"),
+            berat_sensor=d["berat"],
+            confidence=d.get("confidence"),
+            foto_url=d.get("foto_url"),
+        ))
         db.flush()
-
+ 
         detail_responses.append(_serialize_detail(detail_transaksi, db))
-
+ 
     nasabah.saldo = nasabah.saldo + total_nilai
-    db.commit()
-    db.refresh(transaksi)
-    db.refresh(nasabah)
-
+    db.flush()
+ 
     return TransaksiResponse(
         id_transaksi=transaksi.id_transaksi,
         nik=transaksi.nik,
@@ -324,8 +313,30 @@ def create_transaksi_iot(
         total_nilai=transaksi.total_nilai,
         keterangan=transaksi.keterangan,
         saldo_nasabah_sekarang=nasabah.saldo,
-        details=detail_responses
+        details=detail_responses,
     )
+ 
+ 
+@router.post("/create-iot", response_model=TransaksiResponse)
+def create_transaksi_iot(
+    data: TransaksiIoTCreate,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_iot_api_key),
+):
+    """Endpoint lama (1 request lengkap: berat + hasil ML). Tetap dipertahankan."""
+    items = [
+        {
+            "id_jenis": item.id_jenis,
+            "berat": item.berat,
+            "jenis_terdeteksi": item.jenis_terdeteksi,
+            "confidence": item.confidence,
+            "foto_url": _save_base64_image(item.foto_base64),
+        }
+        for item in data.detail
+    ]
+    hasil = buat_transaksi_iot(db, data.nik, items, data.keterangan or "Transaksi otomatis dari IoT")
+    db.commit()
+    return hasil
 
 
 # ========== ADMIN: EDIT 1 ITEM SAMPAH DALAM TRANSAKSI ==========
